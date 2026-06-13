@@ -81,7 +81,7 @@ def fetch_top_sectors():
 def fetch_top_etfs(stock_df):
     """从行情数据中筛选ETF涨幅TOP5"""
     try:
-        etf_mask = stock_df['代码'].astype(str).str.match(r'^(51\d{3}|159\d{3}|16\d{3})', na=False)
+        etf_mask = stock_df['代码'].astype(str).str.match(r'^(51\d{4}|159\d{3}|16\d{4}|56\d{4}|58\d{4})', na=False)
         etf = stock_df[etf_mask].copy()
         if len(etf) == 0:
             raise ValueError("未找到ETF")
