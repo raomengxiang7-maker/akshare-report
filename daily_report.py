@@ -11,7 +11,7 @@ import os
 import traceback
 
 SENDER = "raomengxiang7@outlook.com"
-SMTP_SERVER = "smtp-mail.outlook.com"
+SMTP_SERVER = "smtp.office365.com"
 SMTP_PORT = 587
 RECEIVER = "raomengxiang7@outlook.com"
 
