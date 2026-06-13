@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 A股市场每日速览 - 自动化报告
 定时抓取A股数据并发送HTML邮件报告
@@ -196,7 +196,7 @@ def main():
     """主函数"""
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] A股日报脚本启动")
 
-    if not is_trade_day():
+    if not is_trade_day() and os.environ.get("FORCE_RUN") != "true":
         print("今天非交易日，跳过运行。")
         return
 
@@ -217,3 +217,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
