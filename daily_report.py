@@ -1,8 +1,5 @@
-﻿# -*- coding: utf-8 -*-
-"""
-A股市场每日速览 - 自动化报告
-定时抓取A股数据并发送HTML邮件报告
-"""
+# -*- coding: utf-8 -*-
+"""A股市场每日速览 - 自动化报告 (Sina 数据源版)"""
 
 import akshare as ak
 import pandas as pd
@@ -12,6 +9,7 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 import os
 import traceback
+import re
 
 # ========== 配置区 ==========
 SENDER = "raomengxiang7@outlook.com"
@@ -21,9 +19,8 @@ PASSWORD = os.environ.get("EMAIL_PWD")
 RECEIVER = "raomengxiang7@outlook.com"
 # ===========================
 
-
 def is_trade_day():
-    """判断今天是否为交易日"""
+    """判断今天是否为交易日（使用新浪接口，全球可访问）"""
     try:
         today = datetime.now().strftime("%Y%m%d")
         trade_df = ak.tool_trade_date_hist_sina()
@@ -33,61 +30,85 @@ def is_trade_day():
         wd = datetime.now().weekday()
         return wd < 5
 
+def fetch_index_data():
+    """获取大盘指数数据（新浪接口）"""
+    idx_map = [
+        ('sh000001', '上证指数'),
+        ('sz399001', '深证成指'),
+        ('sz399006', '创业板指'),
+        ('sh000688', '科创50'),
+    ]
+    results = []
+    for symbol, name in idx_map:
+        try:
+            df = ak.stock_zh_index_daily(symbol=symbol)
+            last = df.iloc[-1]
+            results.append({
+                '指数': name,
+                '最新价': last['close'],
+                '涨跌幅(%)': round((last['close'] - last['open']) / last['open'] * 100, 2),
+                '成交量': last.get('volume', 0),
+                '成交额(元)': last.get('amount', 0),
+            })
+        except Exception as e:
+            print(f"  指数 {name} 获取失败: {e}")
+    return pd.DataFrame(results)
 
-def fetch_data():
-    """抓取A股市场数据"""
+def fetch_market_sentiment():
+    """从个股数据统计涨跌家数（新浪接口）"""
     try:
-        index_df = ak.stock_zh_index_spot_em()
-        target = ['上证指数', '深证成指', '创业板指', '科创50']
-        index_df = index_df[index_df['名称'].isin(target)][['名称', '最新价', '涨跌幅', '成交量', '成交额']]
-        index_df.columns = ['指数', '最新价', '涨跌幅(%)', '成交量(手)', '成交额(元)']
-        index_df = index_df.reset_index(drop=True)
+        df = ak.stock_zh_a_spot()
+        up_count = int((df['涨跌幅'] > 0).sum())
+        down_count = int((df['涨跌幅'] < 0).sum())
+        return f"上涨 {up_count} 家，下跌 {down_count} 家", df
+    except Exception as e:
+        print(f"市场情绪获取失败: {e}")
+        return "数据获取中...", None
 
-        market_df = ak.stock_zh_index_spot_em()
-        up_col = [c for c in market_df.columns if '上涨' in c]
-        down_col = [c for c in market_df.columns if '下跌' in c]
-        if up_col and down_col:
-            up = market_df[up_col[0]].dropna().iloc[0] if not market_df[up_col[0]].dropna().empty else 'N/A'
-            down = market_df[down_col[0]].dropna().iloc[0] if not market_df[down_col[0]].dropna().empty else 'N/A'
-        else:
-            up, down = 'N/A', 'N/A'
-
+def fetch_top_sectors():
+    """获取热门行业板块 TOP5"""
+    sectors = []
+    # 尝试东方财富 - GitHub Actions 可能被墙，但保留尝试
+    try:
         sector_df = ak.stock_board_industry_name_em()
-        top_sectors = sector_df.nlargest(5, '涨跌幅')[['板块名称', '涨跌幅']]
-        top_sectors.columns = ['板块', '涨跌幅(%)']
+        top = sector_df.nlargest(5, '涨跌幅')[['板块名称', '涨跌幅']]
+        top.columns = ['板块', '涨跌幅(%)']
+        return top
+    except Exception:
+        print("  东财板块数据不可用")
+    return pd.DataFrame(columns=['板块', '涨跌幅(%)'])
 
-        etf_df = ak.fund_etf_spot_em()
-        mask = ~etf_df['名称'].str.contains('债|货币|国债|逆回购|回购', case=False, na=False)
-        etf_stock = etf_df[mask].copy()
-        etf_stock['涨跌幅'] = pd.to_numeric(etf_stock['涨跌幅'], errors='coerce')
-        top_etf = etf_stock.nlargest(5, '涨跌幅')[['名称', '涨跌幅']]
-        top_etf.columns = ['ETF名称', '涨跌幅(%)']
+def fetch_top_etfs(stock_df):
+    """从行情数据中筛选ETF涨幅TOP5"""
+    try:
+        etf_mask = stock_df['代码'].astype(str).str.match(r'^(51\d{3}|159\d{3}|16\d{3})', na=False)
+        etf = stock_df[etf_mask].copy()
+        if len(etf) == 0:
+            raise ValueError("未找到ETF")
+        top = etf.nlargest(5, '涨跌幅')[['名称', '涨跌幅']]
+        top.columns = ['ETF名称', '涨跌幅(%)']
+        return top
+    except Exception as e:
+        print(f"  ETF筛选失败: {e}")
+    return pd.DataFrame(columns=['ETF名称', '涨跌幅(%)'])
 
-        stock_df = ak.stock_zh_a_spot_em()
-        stock_df['涨跌幅'] = pd.to_numeric(stock_df['涨跌幅'], errors='coerce')
+def fetch_top_stocks(stock_df):
+    """获取个股涨幅TOP10"""
+    try:
         cond = (
             ~stock_df['名称'].str.contains('ST|退', na=False) &
             (stock_df['最新价'] > 0) &
             (stock_df['涨跌幅'] < 20)
         )
-        valid_stock = stock_df[cond].copy()
-        top_stocks = valid_stock.nlargest(10, '涨跌幅')[['名称', '涨跌幅']]
-        top_stocks.columns = ['股票', '涨跌幅(%)']
-
-        return {
-            'index': index_df,
-            'up_down': f"上涨 {up} 家，下跌 {down} 家",
-            'sectors': top_sectors,
-            'etf': top_etf,
-            'stocks': top_stocks
-        }
+        valid = stock_df[cond].copy()
+        top = valid.nlargest(10, '涨跌幅')[['名称', '涨跌幅']]
+        top.columns = ['股票', '涨跌幅(%)']
+        return top
     except Exception as e:
-        print(f"数据抓取出错: {e}")
-        traceback.print_exc()
-        return None
+        print(f"个股筛选失败: {e}")
+    return pd.DataFrame(columns=['股票', '涨跌幅(%)'])
 
-
-def build_html(data):
+def build_html(index_df, up_down, sectors, etf, stocks):
     """构建HTML邮件内容"""
     date_str = datetime.now().strftime("%Y年%m月%d日")
 
@@ -98,71 +119,48 @@ def build_html(data):
             return 'black'
         return 'red' if v > 0 else ('green' if v < 0 else 'gray')
 
-    index_rows = ""
-    for _, row in data['index'].iterrows():
-        chg = row['涨跌幅(%)']
-        c = color(chg)
-        index_rows += (
-            f"<tr><td>{row['指数']}</td><td>{row['最新价']}</td>"
-            f"<td style='color:{c};font-weight:bold'>{chg}%</td>"
-            f"<td>{row['成交额(元)']}</td></tr>"
-        )
+    def make_table(headers, rows, header_color):
+        if len(rows) == 0:
+            return "<p>暂无数据</p>"
+        hdr = "".join(f"<th>{h}</th>" for h in headers)
+        body = ""
+        for row in rows:
+            cells = "".join(f"<td style='color:{color(v)}'>{v}</td>" for v in row)
+            body += f"<tr>{cells}</tr>"
+        return (f"<table border='1' cellpadding='8' cellspacing='0' style='border-collapse:collapse; width:100%;'>"
+                f"<tr style='background-color:{header_color};color:white;'>{hdr}</tr>{body}</table>")
 
-    sector_rows = ""
-    for _, row in data['sectors'].iterrows():
-        c = color(row['涨跌幅(%)'])
-        sector_rows += (
-            f"<tr><td>{row['板块']}</td>"
-            f"<td style='color:{c};font-weight:bold'>{row['涨跌幅(%)']}%</td></tr>"
-        )
+    index_rows = []
+    for _, r in index_df.iterrows():
+        index_rows.append((r['指数'], r['最新价'], f"{r['涨跌幅(%)']}%", r['成交额(元)']))
+    index_table = make_table(['指数', '最新价', '涨跌幅', '成交额'], index_rows, '#4472C4')
 
-    etf_rows = ""
-    for _, row in data['etf'].iterrows():
-        c = color(row['涨跌幅(%)'])
-        etf_rows += (
-            f"<tr><td>{row['ETF名称']}</td>"
-            f"<td style='color:{c};font-weight:bold'>{row['涨跌幅(%)']}%</td></tr>"
-        )
+    sector_rows = []
+    for _, r in sectors.iterrows():
+        sector_rows.append((r['板块'], f"{r['涨跌幅(%)']}%"))
+    sector_table = make_table(['板块名称', '涨跌幅'], sector_rows, '#ED7D31')
 
-    stock_rows = ""
-    for _, row in data['stocks'].iterrows():
-        c = color(row['涨跌幅(%)'])
-        stock_rows += (
-            f"<tr><td>{row['股票']}</td>"
-            f"<td style='color:{c};font-weight:bold'>{row['涨跌幅(%)']}%</td></tr>"
-        )
+    etf_rows = []
+    for _, r in etf.iterrows():
+        etf_rows.append((r['ETF名称'], f"{r['涨跌幅(%)']}%"))
+    etf_table = make_table(['ETF名称', '涨跌幅'], etf_rows, '#70AD47')
 
-    html = f"""
-    <html>
-    <head><meta charset="utf-8"></head>
-    <body style="font-family:Microsoft YaHei, sans-serif;">
-        <h2>📊 A股市场速览 - {date_str}</h2>
-        <p><b>市场情绪：</b>{data['up_down']}</p>
-        <h3>🏛️ 大盘指数</h3>
-        <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse; width:100%;">
-            <tr style="background-color:#4472C4;color:white;"><th>指数</th><th>最新价</th><th>涨跌幅</th><th>成交额</th></tr>
-            {index_rows}
-        </table>
-        <h3>🔥 热门行业板块 TOP5</h3>
-        <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse; width:100%;">
-            <tr style="background-color:#ED7D31;color:white;"><th>板块名称</th><th>涨跌幅</th></tr>
-            {sector_rows}
-        </table>
-        <h3>📈 热门ETF TOP5</h3>
-        <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse; width:100%;">
-            <tr style="background-color:#70AD47;color:white;"><th>ETF名称</th><th>涨跌幅</th></tr>
-            {etf_rows}
-        </table>
-        <h3>🚀 个股涨幅 TOP10</h3>
-        <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse; width:100%;">
-            <tr style="background-color:#FFC000;color:white;"><th>股票</th><th>涨跌幅</th></tr>
-            {stock_rows}
-        </table>
-    </body>
-    </html>
-    """
+    stock_rows = []
+    for _, r in stocks.iterrows():
+        stock_rows.append((r['股票'], f"{r['涨跌幅(%)']}%"))
+    stock_table = make_table(['股票', '涨跌幅'], stock_rows, '#FFC000')
+
+    html = f"""<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family:Microsoft YaHei, sans-serif;">
+    <h2>📊 A股市场速览 - {date_str}</h2>
+    <p><b>市场情绪：</b>{up_down}</p>
+    <h3>🏛️ 大盘指数</h3>{index_table}
+    <h3>🔥 热门行业板块 TOP5</h3>{sector_table}
+    <h3>📈 热门ETF TOP5</h3>{etf_table}
+    <h3>🚀 个股涨幅 TOP10</h3>{stock_table}
+</body></html>"""
     return html
-
 
 def send_email(html_content):
     """发送HTML邮件"""
@@ -170,7 +168,6 @@ def send_email(html_content):
     if not password:
         print("错误：未设置 EMAIL_PWD 环境变量")
         return False
-
     try:
         msg = MIMEMultipart('alternative')
         msg['Subject'] = f"A股市场速览 - {datetime.now().strftime('%Y-%m-%d')}"
@@ -178,43 +175,36 @@ def send_email(html_content):
         msg['To'] = RECEIVER
         part = MIMEText(html_content, 'html', 'utf-8')
         msg.attach(part)
-
         server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
         server.starttls()
         server.login(SENDER, password)
         server.sendmail(SENDER, RECEIVER, msg.as_string())
         server.quit()
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 邮件发送成功 -> {RECEIVER}")
+        print(f"邮件发送成功 -> {RECEIVER}")
         return True
     except Exception as e:
         print(f"邮件发送失败: {e}")
         traceback.print_exc()
         return False
 
-
 def main():
-    """主函数"""
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] A股日报脚本启动")
-
     if not is_trade_day() and os.environ.get("FORCE_RUN") != "true":
         print("今天非交易日，跳过运行。")
         return
 
     print("正在抓取市场数据...")
-    data = fetch_data()
-    if data is None:
-        print("数据抓取失败，终止运行。")
-        return
+    index_df = fetch_index_data()
+    up_down, stock_df = fetch_market_sentiment()
+    sectors = fetch_top_sectors()
+    etf = fetch_top_etfs(stock_df) if stock_df is not None else pd.DataFrame()
+    stocks = fetch_top_stocks(stock_df) if stock_df is not None else pd.DataFrame()
+    print(f"数据获取完成: 指数={len(index_df)}, 板块={len(sectors)}, ETF={len(etf)}, 个股={len(stocks)}")
 
     print("正在生成HTML报告...")
-    html = build_html(data)
-
-    print("正在发送邮件...")
+    html = build_html(index_df, up_down, sectors, etf, stocks)
     send_email(html)
-
     print("运行完成。")
-
 
 if __name__ == "__main__":
     main()
-
