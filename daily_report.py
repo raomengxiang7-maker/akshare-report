@@ -168,6 +168,11 @@ def main():
     stk = fetch_top_stocks(sdf) if sdf is not None else pd.DataFrame()
     print(f"完成: 指数={len(idx)}, 板块={len(sec)}, ETF={len(etf)}, 个股={len(stk)}")
     html = build_html(idx, ud, sec, etf, stk)
+    # Always save HTML report as artifact
+    report_path = "report.html"
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"报告已保存: {report_path}")
     send_email(html)
     print("运行完成。")
 
