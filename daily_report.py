@@ -102,7 +102,7 @@ def fetch_top_sectors():
 def fetch_all_etfs():
     try:
         d = ak.fund_etf_spot_ths()
-        name_col = d.iloc[:, 1]
+        name_col = d.iloc[:, 2]
         pct_col = pd.to_numeric(d.iloc[:, 8], errors="coerce")
         df_clean = pd.DataFrame({"名称": name_col, "涨跌幅(%)": pct_col}).dropna(subset=["涨跌幅(%)"])
 
@@ -110,7 +110,7 @@ def fetch_all_etfs():
             nu = str(name).upper()
             if any(k in nu for k in ["港股", "恒生", "H股", "香港"]):
                 return "港股"
-            if any(k in nu for k in ["美股", "纳斯达克", "标普", "道琼斯", "纳指"]):
+            if any(k in nu for k in ["美股", "纳斯达克", "标普", "道琼斯", "纳指", "美国", "QQQ", "SPY"]):
                 return "美股"
             return "A股"
 
@@ -208,7 +208,7 @@ def build_html(a_idx, hk_idx, us_idx, updown, sec, etf_df):
         top, bottom = get_top_bottom_funds(sub, 5)
         rows_top = [(r['名称'], f"{r['涨跌幅(%)']}%") for _, r in top.iterrows()]
         rows_btm = [(r['名称'], f"{r['涨跌幅(%)']}%") for _, r in bottom.iterrows()]
-        html += f"<h3>📊 {mkt_name}</h3><h4>涨幅 TOP5</h4>{make_table(['名称','涨跌幅'],rows_top,'#70AD47')}<h4>跌幅 TOP5</h4>{make_table(['名称','涨跌幅'],rows_btm,'#C00000')}"
+        html += f"<h3>📊 {mkt_name}</h3><h4>涨幅 TOP5</h4>{make_table(['名称','涨跌幅'],rows_top,'#70AD47')}<h4>跌幅 TOP5</h4>{make_table(['名称','涨跌幅'],rows_btm,'#FF0000')}"
 
     html += "</body></html>"
     return html
