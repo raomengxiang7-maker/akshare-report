@@ -139,7 +139,7 @@ def send_email(html):
         msg["From"] = SENDER
         msg["To"] = RECEIVER
         msg.attach(MIMEText(html, "html", "utf-8"))
-        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as s
+        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as s:
             s.login(SENDER, pwd)
             s.sendmail(SENDER, RECEIVER, msg.as_string())
         print(f"邮件发送成功 -> {RECEIVER}")
