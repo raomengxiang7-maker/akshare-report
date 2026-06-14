@@ -10,10 +10,10 @@ from datetime import datetime
 import os
 import traceback
 
-SENDER = "raomengxiang7@outlook.com"
-SMTP_SERVER = "smtp.office365.com"
-SMTP_PORT = 587
-RECEIVER = "raomengxiang7@outlook.com"
+SENDER = "1753380036@qq.com"
+SMTP_SERVER = "smtp.qq.com"
+SMTP_PORT = 465
+RECEIVER = "1753380036@qq.com"
 
 
 def is_trade_day():
@@ -139,8 +139,7 @@ def send_email(html):
         msg["From"] = SENDER
         msg["To"] = RECEIVER
         msg.attach(MIMEText(html, "html", "utf-8"))
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as s:
-            s.starttls()
+        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as s
             s.login(SENDER, pwd)
             s.sendmail(SENDER, RECEIVER, msg.as_string())
         print(f"邮件发送成功 -> {RECEIVER}")
