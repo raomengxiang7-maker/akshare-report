@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""全球市场速览 - A股/港股/美股 + ETF排行 + 新闻情绪"""
+"""全球市场速览 - A股/港股/美股 + 多周期涨跌幅 + ETF排行"""
 
 import akshare as ak
 import pandas as pd
@@ -17,22 +17,54 @@ SMTP_PORT = 465
 RECEIVER = "1753380036@qq.com"
 
 
+# ------------------------- 周期涨跌幅计算 -------------------------
+def calc_period_perf(df):
+    """
+    df: 日线数据 DataFrame (需包含 'close' 列，按日期升序)
+    返回 dict: {'day':日涨跌幅, 'week':近一周, 'month':近一月, 'year':近一年}
+    """
+    perf = {"day": None, "week": None, "month": None, "year": None}
+    if df.empty or len(df) < 2:
+        return perf
+    l = df.iloc[-1]["close"]
+    # 日涨跌幅 = 当日与前一日
+    p = df.iloc[-2]["close"]
+    perf["day"] = round((l - p) / p * 100, 2)
+    # 近1周 ≈ 5个交易日
+    if len(df) >= 6:
+        p5 = df.iloc[-6]["close"]
+        perf["week"] = round((l - p5) / p5 * 100, 2)
+    # 近1月 ≈ 21个交易日
+    if len(df) >= 22:
+        p21 = df.iloc[-22]["close"]
+        perf["month"] = round((l - p21) / p21 * 100, 2)
+    # 近1年 ≈ 252个交易日
+    if len(df) >= 253:
+        p252 = df.iloc[-253]["close"]
+        perf["year"] = round((l - p252) / p252 * 100, 2)
+    return perf
+
+
 # ------------------------- A股指数（新浪） -------------------------
 def fetch_a_share_indices():
     idx_map = [
         ("sh000001", "上证指数"), ("sz399001", "深证成指"),
         ("sz399006", "创业板指"), ("sh000688", "科创50"),
+        ("sh000300", "沪深300"), ("sh000905", "中证500"),
+        ("sh000510", "中证A500"), ("sh000906", "中证800"),
+        ("sh000852", "中证1000"),
     ]
     results = []
     for symbol, name in idx_map:
         try:
             df = ak.stock_zh_index_daily(symbol=symbol)
-            last = df.iloc[-1]
-            pct = 0.0
-            if len(df) >= 2:
-                prev_close = df.iloc[-2]["close"]
-                pct = round((last["close"] - prev_close) / prev_close * 100, 2)
-            results.append({"指数": name, "最新价": last["close"], "涨跌幅(%)": pct})
+            last = df.iloc[-1]["close"]
+            perf = calc_period_perf(df)
+            results.append({
+                "指数": name, "最新价": last,
+                "日涨跌幅": perf["day"], "周涨跌幅": perf["week"],
+                "月涨跌幅": perf["month"], "年涨跌幅": perf["year"],
+            })
         except Exception as e:
             print(f"  A股 {name} 失败: {e}")
     return pd.DataFrame(results)
@@ -45,12 +77,13 @@ def fetch_hk_indices():
     for sym, name in hk_map:
         try:
             df = ak.stock_hk_index_daily_sina(symbol=sym)
-            last = df.iloc[-1]
-            pct = 0.0
-            if len(df) >= 2:
-                prev = df.iloc[-2]["close"]
-                pct = round((last["close"] - prev) / prev * 100, 2)
-            results.append({"指数": name, "最新价": last["close"], "涨跌幅(%)": pct})
+            last = df.iloc[-1]["close"]
+            perf = calc_period_perf(df)
+            results.append({
+                "指数": name, "最新价": last,
+                "日涨跌幅": perf["day"], "周涨跌幅": perf["week"],
+                "月涨跌幅": perf["month"], "年涨跌幅": perf["year"],
+            })
         except Exception as e:
             print(f"  港股 {name} 失败: {e}")
     return pd.DataFrame(results)
@@ -58,17 +91,19 @@ def fetch_hk_indices():
 
 # ------------------------- 美股指数（新浪） -------------------------
 def fetch_us_indices():
-    us_map = [(".DJI", "道琼斯"), (".IXIC", "纳斯达克"), (".INX", "标普500")]
+    us_map = [(".DJI", "道琼斯"), (".IXIC", "纳斯达克"),
+              (".INX", "标普500"), (".NDX", "纳斯达克100")]
     results = []
     for sym, name in us_map:
         try:
             df = ak.index_us_stock_sina(symbol=sym)
-            last = df.iloc[-1]
-            pct = 0.0
-            if len(df) >= 2:
-                prev = df.iloc[-2]["close"]
-                pct = round((last["close"] - prev) / prev * 100, 2)
-            results.append({"指数": name, "最新价": last["close"], "涨跌幅(%)": pct})
+            last = df.iloc[-1]["close"]
+            perf = calc_period_perf(df)
+            results.append({
+                "指数": name, "最新价": last,
+                "日涨跌幅": perf["day"], "周涨跌幅": perf["week"],
+                "月涨跌幅": perf["month"], "年涨跌幅": perf["year"],
+            })
         except Exception as e:
             print(f"  美股 {name} 失败: {e}")
     return pd.DataFrame(results)
@@ -86,93 +121,21 @@ def fetch_market_sentiment():
         return "数据获取中...", None
 
 
-# ------------------------- 板块排行（东财，可能被墙） -------------------------
-def fetch_top_sectors():
-    try:
-        sector_df = ak.stock_board_industry_name_em()
-        top = sector_df.nlargest(5, "涨跌幅")[["板块名称", "涨跌幅"]]
-        top.columns = ["板块", "涨跌幅(%)"]
-        return top
-    except Exception:
-        print("  板块数据不可用")
-        return pd.DataFrame(columns=["板块", "涨跌幅(%)"])
-
-
 # ------------------------- ETF排行（同花顺） -------------------------
-def fetch_all_etfs():
+def fetch_etfs():
     try:
         d = ak.fund_etf_spot_ths()
-        name_col = d.iloc[:, 2]
+        name_col = d.iloc[:, 2]  # 名称
         pct_col = pd.to_numeric(d.iloc[:, 8], errors="coerce")
         df_clean = pd.DataFrame({"名称": name_col, "涨跌幅(%)": pct_col}).dropna(subset=["涨跌幅(%)"])
-
-        def market_classify(name):
-            nu = str(name).upper()
-            if any(k in nu for k in ["港股", "恒生", "H股", "香港"]):
-                return "港股"
-            if any(k in nu for k in ["美股", "纳斯达克", "标普", "道琼斯", "纳指", "美国", "QQQ", "SPY"]):
-                return "美股"
-            return "A股"
-
-        df_clean["市场"] = df_clean["名称"].apply(market_classify)
-        return df_clean
+        return df_clean.sort_values("涨跌幅(%)", ascending=False)
     except Exception as e:
         print(f"ETF数据失败: {e}")
-        return pd.DataFrame(columns=["名称", "涨跌幅(%)", "市场"])
-
-
-def get_top_bottom_funds(df_fund, top_n=10):
-    if df_fund.empty:
-        return pd.DataFrame(), pd.DataFrame()
-    df_sorted = df_fund.sort_values("涨跌幅(%)", ascending=False)
-    return df_sorted.head(top_n), df_sorted.tail(top_n)
-
-
-# ------------------------- 新闻情绪分析（东财） -------------------------
-def fetch_news_sentiment():
-    result = {"A股": {"bull": [], "bear": []},
-              "港股": {"bull": [], "bear": []},
-              "美股": {"bull": [], "bear": []}}
-    try:
-        news_df = ak.stock_news_em()
-        if news_df.empty:
-            return result
-        market_kw = {
-            "A股": ["A股", "沪深", "上证", "深证", "创业板", "科创", "北交所", "央行", "证监会"],
-            "港股": ["港股", "恒生", "H股", "香港", "南下资金", "港股通"],
-            "美股": ["美股", "道琼斯", "纳斯达克", "标普", "美联储", "美国", "中概股"],
-        }
-        bull_kw = ["上涨", "大涨", "利好", "突破", "提振", "放量", "净流入", "增持", "看好", "强势", "反弹", "新高", "降息"]
-        bear_kw = ["下跌", "大跌", "利空", "跌破", "拖累", "缩量", "净流出", "减持", "看空", "弱势", "回调", "新低", "加息"]
-
-        for _, row in news_df.iterrows():
-            title = str(row.get("内容", ""))
-            if not title:
-                continue
-            market = None
-            for m, keys in market_kw.items():
-                if any(k in title for k in keys):
-                    market = m
-                    break
-            if market is None:
-                continue
-            sentiment = None
-            if any(k in title for k in bull_kw):
-                sentiment = "bull"
-            elif any(k in title for k in bear_kw):
-                sentiment = "bear"
-            if sentiment:
-                titles_seen = [item["title"] for item in result[market][sentiment]]
-                if title not in titles_seen and len(result[market][sentiment]) < 5:
-                    result[market][sentiment].append({"title": title})
-        return result
-    except Exception as e:
-        print(f"  新闻分析不可用: {e}")
-        return result
+        return pd.DataFrame(columns=["名称", "涨跌幅(%)"])
 
 
 # ------------------------- HTML 报告 -------------------------
-def build_html(a_idx, hk_idx, us_idx, updown, sec, etf_df):
+def build_html(a_idx, hk_idx, us_idx, updown, etf_sorted):
     ds = datetime.now().strftime("%Y年%m月%d日")
 
     def cv(v):
@@ -182,33 +145,46 @@ def build_html(a_idx, hk_idx, us_idx, updown, sec, etf_df):
         except Exception:
             return "black"
 
-    def make_table(hd, rows, bg):
+    def make_table(hd, rows):
         if not rows:
             return "<p>暂无数据</p>"
         h = "".join(f"<th>{x}</th>" for x in hd)
         b = "".join("<tr>" + "".join(f"<td style='color:{cv(z)}'>{z}</td>" for z in r) + "</tr>" for r in rows)
-        return f"<table border='1' cellpadding='8' cellspacing='0' style='border-collapse:collapse;width:100%;'><tr style='background-color:{bg};color:white;'>{h}</tr>{b}</table>"
+        return f"<table border='1' cellpadding='8' cellspacing='0' style='border-collapse:collapse;width:100%;'>{h}{b}</table>"
+
+    def color_header(c):
+        return f"<tr style='background-color:{c};color:white;'>"
+
+    # 指数表格: hd = [指数, 最新价, 日涨跌幅, 周涨跌幅, 月涨跌幅, 年涨跌幅]
+    idh = ["指数", "最新价", "日涨跌幅", "周涨跌幅", "月涨跌幅", "年涨跌幅"]
+
+    def idx_rows(df):
+        return [(r["指数"], r["最新价"],
+                 f"{r['日涨跌幅']}%" if pd.notna(r.get('日涨跌幅')) else "-",
+                 f"{r['周涨跌幅']}%" if pd.notna(r.get('周涨跌幅')) else "-",
+                 f"{r['月涨跌幅']}%" if pd.notna(r.get('月涨跌幅')) else "-",
+                 f"{r['年涨跌幅']}%" if pd.notna(r.get('年涨跌幅')) else "-") for _, r in df.iterrows()]
 
     html = f"""<html><head><meta charset="utf-8"></head>
 <body style="font-family:Microsoft YaHei,sans-serif;">
 <h2>🌍 全球市场速览 - {ds}</h2>
 <p><b>市场情绪：</b>{updown}</p>
-<h3>🇨🇳 A股指数</h3>{make_table(["指数","最新价","涨跌幅"],[(r['指数'],r['最新价'],f"{r['涨跌幅(%)']}%") for _,r in a_idx.iterrows()],"#C00000")}
-<h3>🇭🇰 港股指数</h3>{make_table(["指数","最新价","涨跌幅"],[(r['指数'],r['最新价'],f"{r['涨跌幅(%)']}%") for _,r in hk_idx.iterrows()],"#0072C6")}
-<h3>🇺🇸 美股指数</h3>{make_table(["指数","最新价","涨跌幅"],[(r['指数'],r['最新价'],f"{r['涨跌幅(%)']}%") for _,r in us_idx.iterrows()],"#548235")}
-<h3>🔥 热门板块 TOP5</h3>{make_table(["板块","涨跌幅"],[(r['板块'],f"{r['涨跌幅(%)']}%") for _,r in sec.iterrows()],"#ED7D31")}
+
+<h3>🇨🇳 A股指数</h3>{make_table(idh, idx_rows(a_idx))}
+<h3>🇭🇰 港股指数</h3>{make_table(idh, idx_rows(hk_idx))}
+<h3>🇺🇸 美股指数</h3>{make_table(idh, idx_rows(us_idx))}
 """
 
-    # ETF 排行按市场分组
-    for mkt_name, mkt_key in [("A股ETF排行", "A股"), ("港股ETF排行", "港股"), ("美股ETF排行", "美股")]:
-        sub = etf_df[etf_df["市场"] == mkt_key]
-        if sub.empty:
-            html += f"<h3>📊 {mkt_name}</h3><p>暂无数据</p>"
-            continue
-        top, bottom = get_top_bottom_funds(sub, 5)
-        rows_top = [(r['名称'], f"{r['涨跌幅(%)']}%") for _, r in top.iterrows()]
-        rows_btm = [(r['名称'], f"{r['涨跌幅(%)']}%") for _, r in bottom.iterrows()]
-        html += f"<h3>📊 {mkt_name}</h3><h4>涨幅 TOP5</h4>{make_table(['名称','涨跌幅'],rows_top,'#70AD47')}<h4>跌幅 TOP5</h4>{make_table(['名称','涨跌幅'],rows_btm,'#FF0000')}"
+    # ETF 排行（仅A股ETF）
+    if not etf_sorted.empty:
+        top10 = etf_sorted.head(10)
+        bottom10 = etf_sorted.tail(10).sort_values("涨跌幅(%)", ascending=True)
+        html += f"""<h3>📊 ETF 排行</h3>
+<h4>涨幅 TOP10</h4>{make_table(["名称","涨跌幅"],[(r['名称'],f"{r['涨跌幅(%)']}%") for _,r in top10.iterrows()])}
+<h4>跌幅 TOP10</h4>{make_table(["名称","涨跌幅"],[(r['名称'],f"{r['涨跌幅(%)']}%") for _,r in bottom10.iterrows()])}
+"""
+    else:
+        html += "<h3>📊 ETF 排行</h3><p>暂无数据</p>"
 
     html += "</body></html>"
     return html
@@ -252,11 +228,10 @@ def main():
     hk_idx = fetch_hk_indices()
     us_idx = fetch_us_indices()
     ud, _ = fetch_market_sentiment()
-    sec = fetch_top_sectors()
-    etf = fetch_all_etfs()
-    print(f"完成: A股={len(a_idx)}, 港股={len(hk_idx)}, 美股={len(us_idx)}, 板块={len(sec)}, ETF={len(etf)}")
+    etf = fetch_etfs()
+    print(f"完成: A股={len(a_idx)}, 港股={len(hk_idx)}, 美股={len(us_idx)}, ETF={len(etf)}")
 
-    html = build_html(a_idx, hk_idx, us_idx, ud, sec, etf)
+    html = build_html(a_idx, hk_idx, us_idx, ud, etf)
     with open("report.html", "w", encoding="utf-8") as f:
         f.write(html)
     print("报告已保存: report.html")
