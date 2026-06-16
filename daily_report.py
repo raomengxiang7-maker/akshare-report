@@ -214,8 +214,35 @@ def send_email(html):
 
 
 # ------------------------- 主函数 -------------------------
+
+def already_ran_today():
+    try:
+        import requests
+        token = os.environ.get('GH_TOKEN')
+        repo = os.environ.get('GH_REPO')
+        run_id = os.environ.get('GITHUB_RUN_ID')
+        if not token or not repo:
+            return False
+        today = datetime.now().strftime('%Y-%m-%d')
+        url = f'https://api.github.com/repos/{repo}/actions/runs?per_page=20&status=success'
+        hdrs = {'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.github.v3+json'}
+        resp = requests.get(url, headers=hdrs, timeout=15)
+        if resp.ok:
+            for run in resp.json().get('workflow_runs', []):
+                if run['event'] == 'schedule' and str(run['id']) != run_id:
+                    if run['created_at'].startswith(today):
+                        print(f'今天已有成功运行 (#' + str(run['id']) + ')，跳过重复执行')
+                        return True
+        return False
+    except Exception as e:
+        print(f'  去重检查跳过: {e}')
+        return False
+
 def main():
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 全球市场日报启动")
+    if os.environ.get("FORCE_RUN") != "true" and already_ran_today():
+        print("今日已运行，退出。")
+        return
     if not ak.tool_trade_date_hist_sina().empty:
         today = datetime.now().strftime("%Y%m%d")
         tdates = ak.tool_trade_date_hist_sina()["trade_date"].astype(str).tolist()
