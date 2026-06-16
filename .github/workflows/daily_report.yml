@@ -2,17 +2,27 @@ name: A股每日报告
 
 on:
   schedule:
+    - cron: "0 7 * * 1-5"
     - cron: "30 7 * * 1-5"
+    - cron: "0 8 * * 1-5"
+    - cron: "30 8 * * 1-5"
+    - cron: "0 9 * * 1-5"
+    - cron: "30 9 * * 1-5"
+    - cron: "0 10 * * 1-5"
   workflow_dispatch:
     inputs:
       force:
-        description: '强制运行（跳过交易日检查）'
+        description: 强制运行
         required: false
-        default: 'false'
+        default: "false"
         type: choice
         options:
-          - 'false'
-          - 'true'
+          - "false"
+          - "true"
+
+concurrency:
+  group: report-${{ github.workflow }}
+  cancel-in-progress: false
 
 jobs:
   report:
@@ -29,9 +39,10 @@ jobs:
         env:
           EMAIL_PWD: ${{ secrets.EMAIL_PWD }}
           FORCE_RUN: ${{ github.event.inputs.force || 'false' }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: python daily_report.py
-      - name: 上传HTML报告
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: akshare-report
           path: report.html
